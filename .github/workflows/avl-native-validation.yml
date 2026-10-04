@@ -47,22 +47,23 @@ jobs:
           clang-tidy-18 --version
           mkdir -p /tmp/avl-evidence
           clang-format-18 data_structures/binary_trees/avl_tree.c > /tmp/avl-evidence/avl_tree.formatted.c
-          diff -u data_structures/binary_trees/avl_tree.c /tmp/avl-evidence/avl_tree.formatted.c > /tmp/avl-evidence/format.diff || true
+          diff -u data_structures/binary_trees/avl_tree.c /tmp/avl-evidence/avl_tree.formatted.c > /tmp/avl-evidence/format.diff
           cat /tmp/avl-evidence/format.diff
+          sed '/^AnalyzeTemporaryDtors:/d' .clang-tidy > /tmp/avl-evidence/tidy-config.yml
           set +e
-          clang-tidy-18 data_structures/binary_trees/avl_tree.c -- -std=c11 > /tmp/avl-evidence/tidy.log 2>&1
+          clang-tidy-18 --config-file=/tmp/avl-evidence/tidy-config.yml data_structures/binary_trees/avl_tree.c -- -std=c11 > /tmp/avl-evidence/tidy.log 2>&1
           code=$?
           set -e
           cat /tmp/avl-evidence/tidy.log
           echo "TIDY_EXIT=$code"
           git show e5dad3fa8def3726ec850ca66a7f51521f8ad393:data_structures/binary_trees/avl_tree.c > /tmp/avl-evidence/baseline.c
-          cp .clang-tidy /tmp/avl-evidence/.clang-tidy
           set +e
-          clang-tidy-18 /tmp/avl-evidence/baseline.c -- -std=c11 > /tmp/avl-evidence/baseline-tidy.log 2>&1
+          clang-tidy-18 --config-file=/tmp/avl-evidence/tidy-config.yml /tmp/avl-evidence/baseline.c -- -std=c11 > /tmp/avl-evidence/baseline-tidy.log 2>&1
           baseline_code=$?
           set -e
           cat /tmp/avl-evidence/baseline-tidy.log
           echo "BASELINE_TIDY_EXIT=$baseline_code"
+          test "$code" -eq 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
