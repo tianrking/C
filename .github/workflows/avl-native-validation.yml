@@ -8,6 +8,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Verify unchanged original source and active assertions
         run: |
           test "$(git hash-object data_structures/binary_trees/avl_tree.c)" = "$(git rev-parse e5dad3fa8def3726ec850ca66a7f51521f8ad393:data_structures/binary_trees/avl_tree.c)"
