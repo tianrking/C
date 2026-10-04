@@ -1,0 +1,34 @@
+name: AVL native original validation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify unchanged original source and active assertions
+        run: |
+          test "$(git hash-object data_structures/binary_trees/avl_tree.c)" = "$(git rev-parse e5dad3fa8def3726ec850ca66a7f51521f8ad393:data_structures/binary_trees/avl_tree.c)"
+          cc --version
+          cc -std=c11 -Wall -Wextra -Wpedantic -UNDEBUG -I. validation/avl-original-probe.c -o /tmp/avl-probe
+      - name: Expect two behavioral failures and four controls
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          for case in range(6):
+              result = subprocess.run(['/tmp/avl-probe', str(case)], capture_output=True, text=True)
+              expected_failure = case in (0, 1)
+              print(f'CASE {case} exit={result.returncode} expected_failure={expected_failure}', flush=True)
+              print(result.stderr, flush=True)
+              assert (result.returncode != 0) == expected_failure
+          PY
+      - name: Sanitizer evidence for failing right-heavy deletion
+        run: |
+          cc -std=c11 -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer -g -I. validation/avl-original-probe.c -o /tmp/avl-probe-san
+          set +e
+          /tmp/avl-probe-san 0
+          code=$?
+          set -e
+          test "$code" -ne 0
