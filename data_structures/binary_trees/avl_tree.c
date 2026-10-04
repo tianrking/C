@@ -1,3 +1,5 @@
+#include <assert.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -156,7 +158,7 @@ avlNode *insert(avlNode *node, int key)
     return node;
 }
 
-avlNode *delete (avlNode *node, int queryNum)
+avlNode *delete(avlNode *node, int queryNum)
 {
     if (node == NULL)
         return node;
@@ -218,11 +220,11 @@ avlNode *delete (avlNode *node, int queryNum)
     }
 
     /*Right Right */
-    if ((balance < -1) && (heightDiff(node->right) >= 0))
+    if ((balance < -1) && (heightDiff(node->right) <= 0))
         return leftRotate(node);
 
     /*Right Left */
-    if ((balance < -1) && (heightDiff(node->right) < 0))
+    if ((balance < -1) && (heightDiff(node->right) > 0))
     {
         node = RightLeftRotate(node);
     }
@@ -271,8 +273,172 @@ void printPostOrder(avlNode *node)
     printf("  %d  ", (node->key));
 }
 
+/** Verify ordering, stored heights, and balance independently of tree helpers.
+ */
+static int assert_avl_invariants(avlNode *node, long long lower,
+                                 long long upper, size_t *count)
+{
+    if (node == NULL)
+    {
+        return -1;
+    }
+    assert(lower < node->key && node->key < upper);
+    int left = assert_avl_invariants(node->left, lower, node->key, count);
+    int right = assert_avl_invariants(node->right, node->key, upper, count);
+    assert(left - right >= -1 && left - right <= 1);
+    int height = 1 + (left > right ? left : right);
+    assert(node->height == height);
+    ++*count;
+    return height;
+}
+
+/** Compare every key and the node count against an independent set model. */
+static void assert_avl_contents(avlNode *root, const int present[32])
+{
+    size_t actual_count = 0;
+    size_t expected_count = 0;
+    assert_avl_invariants(root, LLONG_MIN, LLONG_MAX, &actual_count);
+    for (int key = 0; key < 32; ++key)
+    {
+        avlNode *found = findNode(root, key);
+        assert((found != NULL) == (present[key] != 0));
+        if (found != NULL)
+        {
+            assert(found->key == key);
+            ++expected_count;
+        }
+    }
+    assert(actual_count == expected_count);
+}
+
+/** Exercise both deletion directions with child balance -1, 0, and +1. */
+static void test_deletion_rotations(void)
+{
+    const struct
+    {
+        int keys[5];
+        size_t length;
+        int removed;
+        int expected_root;
+    } cases[] = {{{2, 1, 4, 5}, 4, 1, 4},    {{2, 1, 4, 3}, 4, 1, 3},
+                 {{2, 1, 4, 3, 5}, 5, 1, 4}, {{4, 2, 5, 1}, 4, 5, 2},
+                 {{4, 2, 5, 3}, 4, 5, 3},    {{4, 2, 5, 1, 3}, 5, 5, 2}};
+    for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); ++c)
+    {
+        avlNode *root = NULL;
+        int present[32] = {0};
+        for (size_t i = 0; i < cases[c].length; ++i)
+        {
+            int key = cases[c].keys[i];
+            root = insert(root, key);
+            present[key] = 1;
+            assert_avl_contents(root, present);
+        }
+        root = delete (root, cases[c].removed);
+        present[cases[c].removed] = 0;
+        assert_avl_contents(root, present);
+        assert(root->key == cases[c].expected_root);
+        for (size_t i = 0; i < cases[c].length; ++i)
+        {
+            int key = cases[c].keys[i];
+            root = delete (root, key);
+            present[key] = 0;
+            assert_avl_contents(root, present);
+        }
+        assert(root == NULL);
+    }
+}
+
+/** Deterministically permute insertion and deletion orders without rand(). */
+static void shuffle_keys(int keys[32], unsigned int *state)
+{
+    for (size_t i = 31; i > 0; --i)
+    {
+        *state = *state * 1664525u + 1013904223u;
+        size_t j = *state % (i + 1);
+        int temp = keys[i];
+        keys[i] = keys[j];
+        keys[j] = temp;
+    }
+}
+
+/** Check each mutation, including duplicate insertions and missing deletions.
+ */
+static void test_deletion_sequences(void)
+{
+    unsigned int state = 1;
+    for (int round = 0; round < 16; ++round)
+    {
+        avlNode *root = NULL;
+        int present[32] = {0};
+        int keys[32];
+        for (int key = 0; key < 32; ++key)
+        {
+            keys[key] = key;
+        }
+        shuffle_keys(keys, &state);
+        for (size_t i = 0; i < 32; ++i)
+        {
+            int key = keys[i];
+            root = insert(root, key);
+            present[key] = 1;
+            assert_avl_contents(root, present);
+            root = insert(root, key);
+            assert_avl_contents(root, present);
+        }
+        root = delete (root, 32);
+        assert_avl_contents(root, present);
+        shuffle_keys(keys, &state);
+        for (size_t i = 0; i < 32; ++i)
+        {
+            int key = keys[i];
+            root = delete (root, key);
+            present[key] = 0;
+            assert_avl_contents(root, present);
+            root = delete (root, key);
+            assert_avl_contents(root, present);
+        }
+        assert(root == NULL);
+    }
+}
+
+/** Cover signed key boundaries and deletion of a node with two children. */
+static void test_deletion_extrema(void)
+{
+    const int keys[] = {0, INT_MIN, INT_MAX, -1, 1};
+    avlNode *root = NULL;
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i)
+    {
+        root = insert(root, keys[i]);
+        size_t count = 0;
+        assert_avl_invariants(root, LLONG_MIN, LLONG_MAX, &count);
+        assert(count == i + 1);
+        assert(findNode(root, keys[i])->key == keys[i]);
+    }
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i)
+    {
+        root = delete (root, keys[i]);
+        size_t count = 0;
+        assert_avl_invariants(root, LLONG_MIN, LLONG_MAX, &count);
+        assert(count == sizeof(keys) / sizeof(keys[0]) - i - 1);
+        for (size_t j = 0; j < sizeof(keys) / sizeof(keys[0]); ++j)
+        {
+            avlNode *found = findNode(root, keys[j]);
+            assert((found != NULL) == (j > i));
+            if (found != NULL)
+            {
+                assert(found->key == keys[j]);
+            }
+        }
+    }
+    assert(root == NULL);
+}
+
 int main()
 {
+    test_deletion_rotations();
+    test_deletion_sequences();
+    test_deletion_extrema();
     int choice;
     int flag = 1;
     int insertNum;
