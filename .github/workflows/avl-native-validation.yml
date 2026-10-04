@@ -1,6 +1,10 @@
-name: AVL native original validation
+name: AVL native fixed validation
 on:
   workflow_dispatch:
+    inputs:
+      formal_sha:
+        required: true
+        default: 2a8f708238dbbc314681923e5cc87f1919e9fe06
 permissions:
   contents: read
 jobs:
@@ -9,28 +13,58 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.formal_sha }}
           fetch-depth: 0
-      - name: Verify unchanged original source and active assertions
+          persist-credentials: false
+      - name: Verify exact formal commit and standalone AVL native tests
+        env:
+          FORMAL_SHA: ${{ inputs.formal_sha }}
         run: |
-          test "$(git hash-object data_structures/binary_trees/avl_tree.c)" = "$(git rev-parse e5dad3fa8def3726ec850ca66a7f51521f8ad393:data_structures/binary_trees/avl_tree.c)"
+          test "$(git rev-parse HEAD)" = "$FORMAL_SHA"
+          git log -1 --format='%H %an <%ae> %cn <%ce>'
+          git hash-object data_structures/binary_trees/avl_tree.c
           cc --version
-          cc -std=c11 -Wall -Wextra -Wpedantic -UNDEBUG -I. validation/avl-original-probe.c -o /tmp/avl-probe
-      - name: Expect two behavioral failures and four controls
+          cc -std=c11 -Wall -Wextra -Wpedantic -UNDEBUG data_structures/binary_trees/avl_tree.c -o /tmp/avl
+          printf '0\n' | /tmp/avl
+          git show 54d40b9e30f3727e54371257943244893fba2050:validation/avl-original-probe.c > /tmp/probe.c
+          cc -std=c11 -UNDEBUG -I. /tmp/probe.c -o /tmp/probe
+          for c in 0 1 2 3 4 5; do /tmp/probe "$c"; echo "GREEN case $c"; done
+      - name: ASan and UBSan with active assertions
         run: |
-          python3 - <<'PY'
-          import subprocess
-          for case in range(6):
-              result = subprocess.run(['/tmp/avl-probe', str(case)], capture_output=True, text=True)
-              expected_failure = case in (0, 1)
-              print(f'CASE {case} exit={result.returncode} expected_failure={expected_failure}', flush=True)
-              print(result.stderr, flush=True)
-              assert (result.returncode != 0) == expected_failure
-          PY
-      - name: Sanitizer evidence for failing right-heavy deletion
+          cc -std=c11 -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer -g data_structures/binary_trees/avl_tree.c -o /tmp/avl-san
+          printf '0\n' | /tmp/avl-san
+          cc -std=c11 -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer -g -I. /tmp/probe.c -o /tmp/probe-san
+          for c in 0 1 2 3 4 5; do /tmp/probe-san "$c"; done
+      - name: Full repository C11 Debug CMake build
         run: |
-          cc -std=c11 -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer -g -I. validation/avl-original-probe.c -o /tmp/avl-probe-san
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          cmake --build build --parallel 2
+          test -z "$(grep -l -- '-DNDEBUG' build/compile_commands.json || true)"
+      - name: Explicit source formatting and static analysis evidence
+        if: always()
+        run: |
+          clang-format-18 --version
+          clang-tidy-18 --version
+          mkdir -p /tmp/avl-evidence
+          clang-format-18 data_structures/binary_trees/avl_tree.c > /tmp/avl-evidence/avl_tree.formatted.c
+          diff -u data_structures/binary_trees/avl_tree.c /tmp/avl-evidence/avl_tree.formatted.c > /tmp/avl-evidence/format.diff || true
+          cat /tmp/avl-evidence/format.diff
           set +e
-          /tmp/avl-probe-san 0
+          clang-tidy-18 data_structures/binary_trees/avl_tree.c -- -std=c11 > /tmp/avl-evidence/tidy.log 2>&1
           code=$?
           set -e
-          test "$code" -ne 0
+          cat /tmp/avl-evidence/tidy.log
+          echo "TIDY_EXIT=$code"
+          git show e5dad3fa8def3726ec850ca66a7f51521f8ad393:data_structures/binary_trees/avl_tree.c > /tmp/avl-evidence/baseline.c
+          cp .clang-tidy /tmp/avl-evidence/.clang-tidy
+          set +e
+          clang-tidy-18 /tmp/avl-evidence/baseline.c -- -std=c11 > /tmp/avl-evidence/baseline-tidy.log 2>&1
+          baseline_code=$?
+          set -e
+          cat /tmp/avl-evidence/baseline-tidy.log
+          echo "BASELINE_TIDY_EXIT=$baseline_code"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: avl-source-checks
+          path: /tmp/avl-evidence/
